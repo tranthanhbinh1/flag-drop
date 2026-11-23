@@ -1,0 +1,36 @@
+# Install once: uv run pre-commit install
+# Run on everything: uv run pre-commit run --all-files
+# Hook revs match the pins in pyproject.toml (ruff 0.17.6); bump them together.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]   # keep parquet/duckdb out of git
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.6
+    hooks:
+      # Lint with autofix; rule "I" in pyproject.toml makes this sort imports.
+      # Must run before ruff-format so formatting sees the fixed code.
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+
+  # Local hook: runs inside the project venv, so pyrefly resolves dagster/polars imports
+  # and uses the version pinned in pyproject.toml.
+  - repo: local
+    hooks:
+      - id: pyrefly
+        name: pyrefly (type check)
+        entry: uv run --frozen pyrefly check
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false   # check the whole project: a change can break types elsewhere

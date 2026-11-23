@@ -31,6 +31,7 @@ pipeline = [
 ]
 dev = [
     "pre-commit==4.7.0",
+    "pyrefly==1.5.0",
     "pytest==9.2.0",
     "ruff==0.17.6",
 ]
@@ -48,3 +49,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pyrefly]
+project-includes = ["orchestration", "tests", "scripts"]
+python-version = "3.12"
+# The editable install puts orchestration/ on sys.path via a .pth file; pyrefly's default heuristics
+# would then treat it as site-packages and skip it.
+disable-project-excludes-heuristics = true
+project-excludes = ["**/.venv/**", "**/__pycache__", "**/node_modules", "data/**"]
