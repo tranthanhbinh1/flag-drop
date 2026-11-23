@@ -1,0 +1,10 @@
+.git
+.venv
+.env
+data
+.idea
+.vscode
+**/__pycache__
+web/node_modules
+transform/target
+transform/logs

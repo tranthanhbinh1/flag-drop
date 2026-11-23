@@ -1,0 +1,58 @@
+# Flag Drop Dagster stack (phase 2). Shared MinIO + Postgres come from
+# ~/projects/infra-homelab/docker-composes/backend, reached over its network.
+#
+#   docker compose -f deploy/docker-compose.yaml --env-file .env up -d --build
+#
+# Run from the repo root so `--env-file .env` supplies RAW_DATA_DIR for the volume below.
+
+name: flag-drop
+
+x-dagster: &dagster
+  image: flag-drop-dagster:latest
+  env_file: ../.env
+  environment: &dagster-env
+    # In-network addresses override the host-side values in .env.
+    MINIO_ENDPOINT: http://minio:9000
+    DAGSTER_PG_HOST: postgres
+    DAGSTER_PG_PORT: "5432"
+  networks: [infra]
+  restart: unless-stopped
+
+services:
+  code_location:
+    <<: *dagster
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: dagster code-server start -h 0.0.0.0 -p 4000 -m flag_drop.definitions
+    volumes:
+      - ../data:/opt/flag-drop/data
+      # data/raw is a symlink to this absolute host path; mount it at the same path so it resolves.
+      - ${RAW_DATA_DIR:?set RAW_DATA_DIR in .env}:${RAW_DATA_DIR}:ro
+    mem_limit: 40g
+    cpus: 12
+    healthcheck:
+      test: ["CMD", "dagster", "api", "grpc-health-check", "-p", "4000"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  dagster_daemon:
+    <<: *dagster
+    command: dagster-daemon run
+    depends_on:
+      code_location: {condition: service_healthy}
+
+  webserver:
+    <<: *dagster
+    command: dagster-webserver -h 0.0.0.0 -p 3000 -w /opt/dagster/home/workspace.yaml
+    ports:
+      - "3000:3000"
+    depends_on:
+      code_location: {condition: service_healthy}
+
+networks:
+  infra:
+    name: backend_infra
+    external: true

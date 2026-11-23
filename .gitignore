@@ -221,3 +221,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Flag Drop local data (raw symlink, Delta, DuckDB, exports)
+data/

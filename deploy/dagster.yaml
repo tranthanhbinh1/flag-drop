@@ -1,0 +1,30 @@
+# Dagster instance config for the Compose deployment (phase 2).
+# `dagster dev` (phase 1) does not use this file; it uses SQLite under its own DAGSTER_HOME.
+
+storage:
+  postgres:
+    postgres_db:
+      hostname: {env: DAGSTER_PG_HOST}
+      port: {env: DAGSTER_PG_PORT}
+      db_name: {env: DAGSTER_PG_DB}
+      username: {env: DAGSTER_PG_USER}
+      password: {env: DAGSTER_PG_PASSWORD}
+
+# Runs execute as subprocesses of the code location gRPC server (no Docker socket, no per-run images).
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
+
+concurrency:
+  runs:
+    max_concurrent_runs: 8
+  pools:
+    # Named pools (silver=6, duckdb=1, minio_upload=4) are set with
+    # `dagster instance concurrency set <pool> <limit>`; see deploy/README.md.
+    default_limit: 4
+
+run_monitoring:
+  enabled: true
+
+telemetry:
+  enabled: false
