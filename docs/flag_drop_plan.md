@@ -72,14 +72,18 @@ through whatever TLC has published in 2026 (~2-month lag).
       (boto3 or `obstore`) gets endpoint/credentials from env vars, never committed.
 - [x] Refresh the coverage table above once done.
 
-### Schema eras (yellow) — handled explicitly in the Silver conform step (Polars)
+### Schema versions (yellow) — handled explicitly in the Silver conform step (Polars)
 
-| Era | Columns | Location |
+| Schema version | Columns | Location |
 |---|---|---|
 | 2009 | `vendor_name`, `Trip_Pickup_DateTime`, `Fare_Amt`, `Start_Lon/Lat`, `End_Lon/Lat`, … | raw lat/lon |
 | 2010 | `vendor_id`, `pickup_datetime`, `pickup_longitude/latitude`, … | raw lat/lon |
 | 2011+ | `VendorID`, `tpep_pickup_datetime`, `PULocationID`, `DOLocationID`, … | taxi zone IDs |
-| 2025+ | adds `cbd_congestion_fee`; `airport_fee` becomes `Airport_fee` | taxi zone IDs |
+| 2023-02+ | `airport_fee` becomes `Airport_fee`; IDs Int64 → Int32 | taxi zone IDs |
+| 2025+ | adds `cbd_congestion_fee` | taxi zone IDs |
+| 2026-06+ | adds `request_source` | taxi zone IDs |
+
+The authoritative schema-version list per dataset (incl. fhvhv: 2019-02, 2025-01) lives in `etl/flag_drop/transformation/standardized/schemas.py`.
 
 Key wrinkle: **2009–2010 trips have coordinates, everything after has zone IDs only.** Silver keeps
 both (nullable lat/lon and nullable zone IDs in one yellow table). Unifying them requires a spatial
@@ -126,7 +130,7 @@ TLC CloudFront ──► BRONZE  raw parquet files, as published (data/raw/{year
                         │
                         ▼  Polars: one raw file → one Silver partition
                    SILVER  Delta Lake tables, one per dataset (data/silver/{dataset}/)
-                        │      partitioned by source_month; conformed schema across eras,
+                        │      partitioned by source_month; conformed schema across versions,
                         │      typed, row-level quality flags; partition overwrite per run
                         │
                         ▼  dbt-duckdb reads Silver via delta_scan()
@@ -184,13 +188,19 @@ One Delta table per dataset: `silver/yellow`, `silver/green`, `silver/fhv`, `sil
   Trips stamped outside their file's month are kept and flagged (`is_out_of_period`).
 - **Write mode:** overwrite only the run's partition (`mode="overwrite"` with a
   `source_month = 'YYYY-MM'` predicate, i.e. replaceWhere). Never append.
-- **Conformed schema per dataset:** canonical snake_case names, fixed types, era differences resolved
-  (rename maps per era, casts, `Airport_fee` → `airport_fee`). Yellow keeps nullable
+- **Conformed schema per dataset:** canonical snake_case names, fixed types, schema-version differences resolved
+  (rename maps per version, casts, `Airport_fee` → `airport_fee`). Yellow keeps nullable
   `pickup_longitude/latitude` (2009–2010) alongside nullable `pu_location_id` (2011+).
-- **Lineage columns:** `source_month`, `source_file`, `schema_era`, `ingested_at`.
-- **Row-level quality flags** (computable from the row alone): `is_zero_duration`, `is_negative_fare`,
-  `is_out_of_period`, `is_passenger_count_invalid`, rolled up into `is_valid_trip`.
-- Conform logic lives in pure functions (`raw DataFrame → Silver DataFrame`), separate from Dagster,
+- **Lineage columns:** `source_month`, `source_file`, `schema_version`, `ingested_at`.
+- **Row-level quality flags** (computable from the row alone): `is_non_positive_duration`,
+  `is_non_positive_fare`, `is_out_of_period`, `is_passenger_count_invalid` (yellow; outside 1–6),
+  rolled up into `is_valid_trip`. `<= 0` on purpose: a $0 fare or 0-minute trip is not a real trip.
+- **Missing data counts as invalid.** A flag whose input is null is True (`fill_null(True)`), so flags
+  are never null and a trip missing fare/passenger_count/timestamps is never `is_valid_trip`. Caveat for
+  the site: a rising flag rate can be TLC no longer reporting a field rather than bad trips — yellow
+  `passenger_count` is null for 4.7% of 2024-01 rows but 22% of 2025-03. Data-quality charts should split
+  "missing" (`<column> is null`) from "out of range".
+- Standardize logic lives in pure functions (`raw DataFrame → Silver DataFrame`), separate from Dagster,
   with unit tests on small fixtures.
 - Table maintenance: `OPTIMIZE` (compaction) and `VACUUM` as a scheduled Dagster job after backfills.
 
@@ -201,7 +211,7 @@ models/
   staging/
     silver/
       _silver__sources.yml          # sources with external_location: delta_scan('data/silver/<dataset>')
-      stg_silver__yellow.sql        # thin: select/rename to project conventions, no era logic
+      stg_silver__yellow.sql        # thin: select/rename to project conventions, no schema-version logic
       stg_silver__green.sql
       stg_silver__fhv.sql
       stg_silver__fhvhv.sql
@@ -256,7 +266,7 @@ Conventions:
   handles concurrent commits on the local filesystem (retry on commit conflict); otherwise cap with a
   Dagster concurrency pool. dbt (DuckDB writer) runs with a pool of 1.
 - Asset checks: row counts vs previous month (anomaly band), share of invalid trips per month,
-  freshness of latest partition, schema fingerprint unchanged within an era, Bronze vs Silver row
+  freshness of latest partition, schema fingerprint unchanged within a schema version, Bronze vs Silver row
   count equality (Silver never drops rows).
 - Sensor/schedule: monthly check of TLC for newly published months → materialize new partitions → rebuild exports.
 - Deployment: see §10 (`dagster dev` first, Docker Compose from M2). The site does not depend on Dagster being up.
@@ -280,19 +290,22 @@ flag-drop/
   pyproject.toml / uv.lock
   README.md
   AGENTS.md                       # agent instructions, like the lakehouse repo
-  orchestration/                  # Dagster code location
-    flag_drop/
+  etl/                            # the whole pipeline: Python package + dbt project
+    dg.toml                       # dg project root (`make dev` runs from here)
+    flag_drop/                    # Python package; only assets/, resources, partitions, definitions import Dagster
       definitions.py
       assets/{ingest,silver,dbt,exports}.py
-      conform/{yellow,green,fhv,fhvhv}.py   # pure Polars conform functions + rename maps
-      schemas.py                  # target pl.Schema per Silver table + check expressions
+      transformation/standardized/
+        schemas.py                # Silver contracts: pl.Schema, schema versions, validation
+        {yellow,green,fhv,fhvhv}.py  # pure Polars standardize functions + rename maps
+      utils/tlc.py                # TLC download + raw file validation
       checks.py
       partitions.py
       resources.py
-  transform/                      # dbt project (Gold)
-    dbt_project.yml
-    profiles.yml                  # duckdb path via env var
-    models/ seeds/ macros/ tests/
+    dbt/                          # dbt project (Gold), its own root
+      dbt_project.yml
+      profiles.yml                # duckdb path via env var
+      models/ seeds/ macros/ tests/
   tests/                          # pytest: conform functions on small fixtures
   deploy/                         # docker-compose.yaml, dagster.yaml, Dockerfile (phase 2)
   web/                            # site (framework decided at M3)
@@ -396,7 +409,7 @@ CREATE DATABASE dagster OWNER dagster;
 |---|---|---|
 | M0 | Scaffold | Repo with uv/ruff/pytest; empty Dagster code location loads; dbt project compiles; Polars → Delta → `delta_scan` smoke test passes; CI green |
 | M1 | Thin slice | `raw_<dataset>` assets top up all datasets to the latest 2026 month (§2 TODO); yellow + fhvhv 2024–2025: raw → Silver (Polars, Delta) → dbt → `fct_trips_daily_zone` via Dagster partitions; tests pass; parallel Silver writes and `delta_scan` partition pruning verified |
-| M2 | Full history | Phase 2 Compose deployment live (§10); all datasets, all eras from 2011 in Silver; backfill runtime, Silver size and DuckDB size recorded; asset checks live; OPTIMIZE/VACUUM job |
+| M2 | Full history | Phase 2 Compose deployment live (§10); all datasets, all schema versions from 2011 in Silver; backfill runtime, Silver size and DuckDB size recorded; asset checks live; OPTIMIZE/VACUUM job |
 | M3 | First story online | Congestion pricing page deployed; frontend choice made and written up as an ADR |
 | M4 | v1 launch | Stories 2 and 3 + "How this is built" page + public dbt docs; README with screenshots |
 | M5 | v2 | 2009–2010 coordinate era via spatial join; monthly auto-update sensor; one v2 story |
@@ -407,7 +420,7 @@ page beats complete models with no site.
 ## 12. Carry-over from `lakehouse`
 
 - Symlink raw parquet from `lakehouse/data/` as `data/raw` — no need to re-download 68 GB.
-- Port the column rename maps in `src/etl/jobs/nyc_tlc_stg_trip_data.py` into `conform/*.py`
+- Port the column rename maps in `src/etl/jobs/nyc_tlc_stg_trip_data.py` into `transformation/standardized/*.py`
   (Python dict → Python dict; Spark `withColumnRenamed` → Polars `rename`).
 - Translate the Pandera schemas in `src/etl/schemas/nyc_tlc_silver_quality_schemas.py` into target
   `pl.Schema` definitions + Polars check expressions (no Pandera dependency), and check definitions from `src/etl/jobs/nyc_tlc_silver_quality.py`.
@@ -430,7 +443,7 @@ page beats complete models with no site.
 
 - **2026-11-23 — Project name: Flag Drop** (was working name `nyc-mobility`).
 - **2026-11-23 — Silver on Delta Lake written by Polars; DuckDB only for Gold.** Replaces "DuckDB +
-  dbt for every layer, DuckLake as stretch". Reasons: per-file era conformance is clearer as tested
+  dbt for every layer, DuckLake as stretch". Reasons: per-file schema-version conformance is clearer as tested
   Python; Delta partition overwrites make Silver idempotent and allow parallel backfills (single-writer
   DuckDB would serialize them); Delta skills transfer to Databricks. Costs accepted: two engines and
   dialects, Silver tests as Polars expressions/asset checks instead of dbt, Delta table maintenance.
@@ -444,3 +457,7 @@ page beats complete models with no site.
 - **2026-11-24 — Raw assets: one asset per dataset (`raw_yellow`, …) with its own monthly partitions;
   new downloads go to `data/landing/`, not into the lakehouse directory.** Keeps impossible partitions
   out of the UI, maps 1:1 to `silver_<dataset>`, and lets Compose mount the old archive read-only.
+- **2026-11-24 — `orchestration/` renamed `etl/`, holding both the Python package (`etl/flag_drop`) and the
+  dbt project (`etl/dbt`).** The package does far more than orchestration (download, conform, validation);
+  one folder for the whole pipeline, with dbt in its own subfolder so dbt's `tests/`, `target/` and
+  packages do not mix with Python. Rejected: `worker/` (clashes with Dagster's run worker), dbt files flat in `etl/`.
