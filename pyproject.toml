@@ -30,6 +30,7 @@ pipeline = [
     "python-dotenv==1.2.4",
 ]
 dev = [
+    "dagster-dg-cli==1.13.31",
     "pre-commit==4.7.0",
     "pyrefly==1.5.0",
     "pytest==9.2.0",
@@ -44,7 +45,7 @@ module_name = "flag_drop.definitions"
 code_location_name = "flag_drop"
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]

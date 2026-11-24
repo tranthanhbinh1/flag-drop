@@ -41,6 +41,8 @@ Portfolio positioning — this project should demonstrate what the day job (Spar
 Found during the top-up: 9 archive files in `lakehouse/data` (and their MinIO copies) were CloudFront 403
 error pages saved as `.parquet` (yellow 2015-07…12 and 2025-10…12), and yellow 2009-04 was missing.
 All were re-downloaded into `data/landing/` and re-uploaded; `data/landing` holds 67 files (8.4 GB).
+The 9 broken copies were deleted from `lakehouse/data` the same day. Downstream steps must still read raw
+files through `RawFiles.candidates` (landing first) or from MinIO, since those months exist only there.
 
 Source URL pattern (for re-download / new months):
 `https://d37ci6vzurychx.cloudfront.net/trip-data/{dataset}_tripdata_{YYYY-MM}.parquet`

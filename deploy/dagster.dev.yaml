@@ -1,0 +1,9 @@
+# Phase 1 (`make dev`) instance config, copied into DAGSTER_HOME by the Makefile.
+# SQLite storage under DAGSTER_HOME; caps mirror deploy/dagster.yaml.
+concurrency:
+  runs:
+    max_concurrent_runs: 8
+  pools:
+    default_limit: 4
+telemetry:
+  enabled: false

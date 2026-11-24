@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 
 from flag_drop.partitions import monthly_partitions, partition_month
-from orchestration.flag_drop.utils.tlc import (
+from flag_drop.utils.tlc import (
     RawFileInvalid,
     fetch,
     inspect_parquet,
@@ -22,9 +22,7 @@ def parquet_bytes(rows: int = 3) -> bytes:
 
 
 def client_returning(status: int, body: bytes = b"") -> httpx.Client:
-    return httpx.Client(
-        transport=httpx.MockTransport(lambda _req: httpx.Response(status, content=body))
-    )
+    return httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(status, content=body)))
 
 
 def test_naming_matches_tlc_and_local_layout():
@@ -48,9 +46,7 @@ def test_fetch_writes_valid_file_atomically(tmp_path: Path):
 @pytest.mark.parametrize("status", [403, 404])
 def test_fetch_unpublished_month_returns_false(tmp_path: Path, status: int):
     dest = tmp_path / "f.parquet"
-    assert (
-        fetch(client_returning(status, b"<Error>AccessDenied</Error>"), "https://x", dest) is False
-    )
+    assert fetch(client_returning(status, b"<Error>AccessDenied</Error>"), "https://x", dest) is False
     assert list(tmp_path.iterdir()) == []
 
 

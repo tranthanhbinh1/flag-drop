@@ -1,0 +1,42 @@
+# Flag Drop developer commands. `make` alone lists them.
+
+# Phase 1 Dagster instance: SQLite storage, run history and logs live here, outside the repo.
+export DAGSTER_HOME ?= $(HOME)/.dagster/flag-drop
+COMPOSE := docker compose -f deploy/docker-compose.yaml --env-file .env
+
+.DEFAULT_GOAL := help
+.PHONY: help dev defs dagster-home test lint check up down logs
+
+help: ## List targets
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+
+dagster-home: ## Create DAGSTER_HOME and sync its dagster.yaml from deploy/dagster.dev.yaml
+	@mkdir -p "$(DAGSTER_HOME)"
+	@cp deploy/dagster.dev.yaml "$(DAGSTER_HOME)/dagster.yaml"
+
+# dg needs the project root (orchestration/dg.toml) as cwd; Dagster would then look for .env there,
+# so pass the repo-root .env explicitly.
+
+# make dagster, reserve `dev` keyword for future backend server
+dagster: dagster-home ## Run `dg dev` (webserver + daemon) on localhost:3004 (fixed)
+	cd orchestration && uv run --frozen --env-file ../.env dg dev -p 3004
+
+defs: ## Check that the Dagster definitions load
+	cd orchestration && uv run --frozen --env-file ../.env dg check defs
+
+test: ## Run pytest
+	uv run --frozen pytest -q
+
+lint: ## Run all pre-commit hooks (ruff, pyrefly, ...) on every file
+	uv run --frozen pre-commit run --all-files
+
+check: lint test ## Lint + tests
+
+up: ## Build and start the Compose stack (phase 2)
+	$(COMPOSE) up -d --build
+
+down: ## Stop the Compose stack
+	$(COMPOSE) down
+
+logs: ## Follow code-location logs of the Compose stack
+	$(COMPOSE) logs -f code_location

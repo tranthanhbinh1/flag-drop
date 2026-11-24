@@ -43,9 +43,7 @@ def env(tmp_path: Path):
         d.mkdir(parents=True)
     resources = {
         "raw_files": RawFiles(data_dir=str(data)),
-        "raw_store": FakeObjectStore(
-            endpoint_url=str(s3), access_key="k", secret_key="s", bucket="raw"
-        ),
+        "raw_store": FakeObjectStore(endpoint_url=str(s3), access_key="k", secret_key="s", bucket="raw"),
         "tlc_source": FakeTlc(base_url=str(upstream)),
     }
     return data, s3, upstream, resources
@@ -113,10 +111,7 @@ def test_broken_archive_copy_is_replaced_from_tlc(env):
     assert mat.metadata["source"].value == "downloaded"
     assert mat.metadata["ignored_broken_copies"].value == [str(broken)]
     assert mat.metadata["uploaded"].value is True
-    assert (
-        stale.stat().st_size
-        == (data / "landing/2015/yellow_tripdata_2015-07.parquet").stat().st_size
-    )
+    assert stale.stat().st_size == (data / "landing/2015/yellow_tripdata_2015-07.parquet").stat().st_size
 
 
 def test_broken_copy_with_nothing_upstream_fails(env):

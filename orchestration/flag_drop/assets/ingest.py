@@ -6,7 +6,7 @@ import dagster as dg
 
 from flag_drop.partitions import DATASETS, monthly_partitions, partition_month
 from flag_drop.resources import RawFiles, RawObjectStore, TlcSource
-from orchestration.flag_drop.utils.tlc import (
+from flag_drop.utils.tlc import (
     RawFileInvalid,
     inspect_parquet,
     raw_relpath,
@@ -54,7 +54,12 @@ def build_raw_asset(dataset: str) -> dg.AssetsDefinition:
             path = raw_files.landing_path(relpath)
             if not tlc_source.fetch(tlc_filename(dataset, month), path):
                 if broken:
-                    raise RawFileInvalid(f"{relpath}: local copy broken and TLC has no file")
+                    # Retrying cannot fix this; fail now instead of after the retry backoff.
+                    raise dg.Failure(
+                        description=f"{relpath}: local copy broken and TLC has no file",
+                        metadata={"ignored_broken_copies": dg.MetadataValue.json(broken)},
+                        allow_retries=False,
+                    )
                 context.log.info(f"{dataset} {month} is not published by TLC yet; skipping")
                 return
             info, source = inspect_parquet(path), "downloaded"
@@ -78,10 +83,7 @@ def build_raw_asset(dataset: str) -> dg.AssetsDefinition:
                 "dagster/row_count": info.rows,
                 "schema_fingerprint": info.schema_fingerprint,
                 "dagster/column_schema": dg.TableSchema(
-                    columns=[
-                        dg.TableColumn(name=name, type=dtype)
-                        for name, dtype in info.columns.items()
-                    ]
+                    columns=[dg.TableColumn(name=name, type=dtype) for name, dtype in info.columns.items()]
                 ),
             }
         )
