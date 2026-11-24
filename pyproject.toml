@@ -50,6 +50,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["flag_drop"]
+
 [tool.pyrefly]
 project-includes = ["orchestration", "tests", "scripts"]
 python-version = "3.12"

@@ -26,44 +26,49 @@ Portfolio positioning — this project should demonstrate what the day job (Spar
 - No backend API for the website in v1. Everything served is precomputed.
 - No ML in v1 (forecasting can be a later story).
 
-## 2. Data inventory (verified against local `data/`, ~68 GB, as of 2026-11-23)
+## 2. Data inventory (MinIO `raw` bucket, verified 2026-11-24 after the top-up)
 
-> Snapshot taken before a top-up download of the latest TLC months (late 2025 and 2026). Refresh this
-> table after the download; the ingest asset should be able to regenerate it.
+> Every month TLC has published is materialized by the `raw_<dataset>` assets: 598 files, 81.9 GB.
+> The asset metadata (row count, schema fingerprint) is the live inventory; this table is a snapshot.
 
-| Dataset | Coverage held | Notes |
+| Dataset | Coverage | Notes |
 |---|---|---|
-| yellow | 2009-01 → 2025-12 (2009 has 11 files) | ~14M rows/month (2009) → ~3.5M (2025) |
-| green | 2014-01 → 2025-09 | Street-hail outside Manhattan core |
-| fhv | 2015-07 → 2025-08 | Sparse schema; base-level FHV |
-| fhvhv | 2019-02 → 2025-09 | Uber/Lyft/Via; ~20M rows/month, ~1.5B rows total — the heavy one |
+| yellow | 2009-01 → 2026-09 (213 files) | ~14M rows/month (2009) → ~3.5M (2025) |
+| green | 2014-01 → 2026-09 (153) | Street-hail outside Manhattan core |
+| fhv | 2015-01 → 2026-08 (140) | Sparse schema; base-level FHV |
+| fhvhv | 2019-02 → 2026-09 (92) | Uber/Lyft/Via; ~20M rows/month, ~1.5B rows total — the heavy one |
+
+Found during the top-up: 9 archive files in `lakehouse/data` (and their MinIO copies) were CloudFront 403
+error pages saved as `.parquet` (yellow 2015-07…12 and 2025-10…12), and yellow 2009-04 was missing.
+All were re-downloaded into `data/landing/` and re-uploaded; `data/landing` holds 67 files (8.4 GB).
 
 Source URL pattern (for re-download / new months):
 `https://d37ci6vzurychx.cloudfront.net/trip-data/{dataset}_tripdata_{YYYY-MM}.parquet`
 
-### TODO: top-up download to latest published month (2026)
+### Done: top-up download to latest published month (2026-11-24)
 
 Gaps to fill: green after 2025-09, fhv after 2025-08, fhvhv after 2025-09, yellow after 2025-12,
 through whatever TLC has published in 2026 (~2-month lag).
 
-- [ ] Implement as the `raw_tlc_file` Dagster asset (download-if-missing per `dataset × month`
+- [x] Implement as the `raw_<dataset>` Dagster assets (download-if-missing per monthly
       partition), not a one-off script, so the same code handles future months via the sensor.
-- [ ] Start from `lakehouse/scripts/bootstrap/initial_load.py`, fixing its known issues:
+- [x] Start from `lakehouse/scripts/bootstrap/initial_load.py`, fixing its known issues:
   - its URLs use `{dataset}_trip_data_` but TLC files are `{dataset}_tripdata_` (match the local filenames);
   - the yellow fetch has no `raise_for_status()`, so a 403 error body would be saved as `.parquet`;
   - downloads load the whole file into memory; stream to a temp file and atomically rename instead.
-- [ ] Treat HTTP 403 as "not published yet" (TLC's response for missing months), not as a failure.
-- [ ] Validate each new file (readable by Polars, row count > 0, schema fingerprint) before it counts as materialized.
-- [ ] Write new files into `lakehouse/data/{year}/` (behind the `data/raw` symlink) with the existing naming.
+- [x] Treat HTTP 403 as "not published yet" (TLC's response for missing months), not as a failure.
+- [x] Validate each new file (readable by Polars, row count > 0, schema fingerprint) before it counts as materialized.
+- [x] Write new files into `data/landing/{year}/` (owned by Flag Drop, same naming). `data/raw` (the
+      lakehouse archive) stays read-only; `RawFiles.candidates` prefers `landing/` over `raw/` and skips invalid copies. MinIO holds the union.
 - [x] **Prerequisite:** run the MinIO defined in `infra-homelab/docker-composes/backend` (holds the data).
       Done 2026-11-24 (orphaned `golden-retriever-minio-1` removed).
-- [ ] Upload to the existing layout: bucket `raw`, key `data/{year}/{dataset}_tripdata_{YYYY-MM}.parquet`.
+- [x] Upload to the existing layout: bucket `raw`, key `data/{year}/{dataset}_tripdata_{YYYY-MM}.parquet`.
       As of 2026-11-23 it already holds all local files from 2011–2025 (517 objects); missing are yellow
       2009 (11) + 2010 (12) and every newly downloaded month. Skip objects that already exist with the same size.
-      New months: upload as part of `raw_tlc_file` so local and MinIO stay in sync.
+      New months: upload as part of `raw_<dataset>` so local and MinIO stay in sync.
 - [x] Use a dedicated MinIO access key for Flag Drop (user `flag-drop`, read/write on `raw` + `flag-drop`), not the root user. The S3 API
       (boto3 or `obstore`) gets endpoint/credentials from env vars, never committed.
-- [ ] Refresh the coverage table above once done.
+- [x] Refresh the coverage table above once done.
 
 ### Schema eras (yellow) — handled explicitly in the Silver conform step (Polars)
 
@@ -231,11 +236,13 @@ Conventions:
 
 ## 6. Orchestration (Dagster)
 
-- Partition definition: multi-partition `dataset × month`, or `MonthlyPartitionsDefinition` per
-  dataset (start dates from §2). Prefer multi-partition if dagster-dbt handles it cleanly; validate in M1.
+- Partition definition: one `MonthlyPartitionsDefinition` per dataset, starting at its first published
+  month (yellow 2009-01, green 2014-01, fhv 2015-01, fhvhv 2019-02; `partitions.py`). Decided in M1:
+  a shared multi-partition would contain combinations that can never exist (green 2009).
 - Assets:
-  - `raw_tlc_file` (Bronze, partitioned): download if missing, verify row count > 0 and schema
-    fingerprint; record schema era as metadata.
+  - `raw_<dataset>` (Bronze, partitioned; `assets/ingest.py`): use the local file or download it,
+    verify row count > 0 and record a schema fingerprint, upload to MinIO if missing or a different size.
+    A month TLC has not published (HTTP 403) yields no materialization rather than a failure.
   - `silver_<dataset>` (partitioned): Polars conform of one raw file, partition overwrite into the
     Delta table; emit row count, flag rates, Delta version as metadata. Writes are explicit in the
     asset (not via an IO manager) to keep the Delta mechanics visible; revisit `dagster-deltalake-polars` later.
@@ -290,7 +297,8 @@ flag-drop/
   scripts/                        # one-off utilities
   docs/                           # this plan, ADRs, write-ups
   data/                           # gitignored
-    raw/                          # Bronze (symlink to lakehouse/data)
+    raw/                          # Bronze archive (symlink to lakehouse/data, read-only)
+    landing/                      # Bronze months downloaded by Flag Drop
     silver/                       # Delta tables
     flag_drop.duckdb              # Gold
     exports/                      # site Parquet
@@ -385,7 +393,7 @@ CREATE DATABASE dagster OWNER dagster;
 | # | Milestone | Exit criteria |
 |---|---|---|
 | M0 | Scaffold | Repo with uv/ruff/pytest; empty Dagster code location loads; dbt project compiles; Polars → Delta → `delta_scan` smoke test passes; CI green |
-| M1 | Thin slice | `raw_tlc_file` asset tops up all datasets to the latest 2026 month (§2 TODO); yellow + fhvhv 2024–2025: raw → Silver (Polars, Delta) → dbt → `fct_trips_daily_zone` via Dagster partitions; tests pass; parallel Silver writes and `delta_scan` partition pruning verified |
+| M1 | Thin slice | `raw_<dataset>` assets top up all datasets to the latest 2026 month (§2 TODO); yellow + fhvhv 2024–2025: raw → Silver (Polars, Delta) → dbt → `fct_trips_daily_zone` via Dagster partitions; tests pass; parallel Silver writes and `delta_scan` partition pruning verified |
 | M2 | Full history | Phase 2 Compose deployment live (§10); all datasets, all eras from 2011 in Silver; backfill runtime, Silver size and DuckDB size recorded; asset checks live; OPTIMIZE/VACUUM job |
 | M3 | First story online | Congestion pricing page deployed; frontend choice made and written up as an ADR |
 | M4 | v1 launch | Stories 2 and 3 + "How this is built" page + public dbt docs; README with screenshots |
@@ -431,3 +439,6 @@ page beats complete models with no site.
   daemon + webserver, DefaultRunLauncher) on the workstation, using infra-homelab's MinIO and Postgres.**
   Rejected: DockerRunLauncher (socket access, per-run images, volume sprawl for no single-user benefit);
   systemd processes (less reproducible, less portfolio value).
+- **2026-11-24 — Raw assets: one asset per dataset (`raw_yellow`, …) with its own monthly partitions;
+  new downloads go to `data/landing/`, not into the lakehouse directory.** Keeps impossible partitions
+  out of the UI, maps 1:1 to `silver_<dataset>`, and lets Compose mount the old archive read-only.
