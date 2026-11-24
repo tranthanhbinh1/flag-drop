@@ -11,7 +11,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["orchestration/flag_drop"]
+packages = ["etl/flag_drop"]
 
 # Pinned exactly (latest as of 2026-11-23). Bump deliberately, one group at a time.
 [dependency-groups]
@@ -55,9 +55,9 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 known-first-party = ["flag_drop"]
 
 [tool.pyrefly]
-project-includes = ["orchestration", "tests", "scripts"]
+project-includes = ["etl", "tests", "scripts"]
 python-version = "3.12"
-# The editable install puts orchestration/ on sys.path via a .pth file; pyrefly's default heuristics
+# The editable install puts etl/ on sys.path via a .pth file; pyrefly's default heuristics
 # would then treat it as site-packages and skip it.
 disable-project-excludes-heuristics = true
 project-excludes = ["**/.venv/**", "**/__pycache__", "**/node_modules", "data/**"]

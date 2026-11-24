@@ -224,3 +224,7 @@ __marimo__/
 
 # Flag Drop local data (raw symlink, Delta, DuckDB, exports)
 data/
+
+# dbt (etl/dbt); target/ is ignored above
+etl/dbt/logs/
+etl/dbt/dbt_packages/

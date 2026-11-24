@@ -17,8 +17,8 @@ WORKDIR /opt/flag-drop
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-default-groups --group pipeline --no-install-project
 
-# Project code. Add `COPY transform ./transform` once the dbt project exists.
-COPY orchestration ./orchestration
+# Project code: the flag_drop package and the dbt project (etl/dbt).
+COPY etl ./etl
 RUN uv sync --frozen --no-default-groups --group pipeline
 
 COPY deploy/dagster.yaml deploy/workspace.yaml /opt/dagster/home/

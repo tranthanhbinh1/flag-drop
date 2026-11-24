@@ -14,15 +14,15 @@ dagster-home: ## Create DAGSTER_HOME and sync its dagster.yaml from deploy/dagst
 	@mkdir -p "$(DAGSTER_HOME)"
 	@cp deploy/dagster.dev.yaml "$(DAGSTER_HOME)/dagster.yaml"
 
-# dg needs the project root (orchestration/dg.toml) as cwd; Dagster would then look for .env there,
+# dg needs the project root (etl/dg.toml) as cwd; Dagster would then look for .env there,
 # so pass the repo-root .env explicitly.
 
 # make dagster, reserve `dev` keyword for future backend server
 dagster: dagster-home ## Run `dg dev` (webserver + daemon) on localhost:3004 (fixed)
-	cd orchestration && uv run --frozen --env-file ../.env dg dev -p 3004
+	cd etl && uv run --frozen --env-file ../.env dg dev -p 3004
 
 defs: ## Check that the Dagster definitions load
-	cd orchestration && uv run --frozen --env-file ../.env dg check defs
+	cd etl && uv run --frozen --env-file ../.env dg check defs
 
 test: ## Run pytest
 	uv run --frozen pytest -q

@@ -1,0 +1,6 @@
+directory_type = "project"
+
+[project]
+root_module = "flag_drop"
+code_location_target_module = "flag_drop.definitions"
+code_location_name = "flag_drop"
