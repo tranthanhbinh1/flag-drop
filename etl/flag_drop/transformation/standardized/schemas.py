@@ -84,7 +84,7 @@ STANDARDIZED_YELLOW = StandardizedTable(
     required=("pickup_ts", "dropoff_ts", "trip_duration_min"),
     schema=pl.Schema(
         {
-            "vendor_id": pl.Int32,  # 2009-2010 vendor codes (CMT/VTS/DDS) map to ids; null if unknown
+            "vendor_id": pl.Int32,  # TLC ids; 2009-2010 CMT/VTS -> 1/2, DDS -> 101 (Flag Drop-only)
             "pickup_ts": pl.Datetime("us"),
             "dropoff_ts": pl.Datetime("us"),
             "passenger_count": pl.Int32,

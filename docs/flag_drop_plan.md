@@ -100,6 +100,17 @@ Reference data needed (dbt seeds):
 - `cbd_zones.csv` — taxi zones inside the Congestion Relief Zone (Manhattan south of 60th St). Hand-built
   from the MTA definition; document the method.
 - `hvfhs_license_num` → company (HV0003 Uber, HV0005 Lyft, etc.).
+- `vendors.csv` — yellow/green `vendor_id` → name: TLC's ids (1 Creative Mobile Technologies, 2 VeriFone/Curb,
+  3–7 later vendors) plus Flag Drop's own ids from 100 up for vendors TLC never numbered. So far only
+  101 = DDS (Digital Dispatch Systems), which appears as a text code in 2009–2010 only.
+
+**Data caveats to surface in the analytics** (story footnotes and the "How this is built" page):
+- **2010 payment type "NA"** (~35k trips/month, Jan–Jul 2010) is kept as null `payment_type`, not mapped to
+  TLC's 5 = "Unknown". Any payment-mix chart covering 2010 should say so, or count null and 5 together as
+  "unknown".
+- **Missing vs out-of-range in flag rates**: see the Silver null rule in §5; a quality-rate jump can be a
+  field TLC stopped filling (yellow `passenger_count` in 2025), not worse trips.
+- **DDS vendor** exists only in 2009–2010; vendor-share charts over time will show it vanish in 2011.
 
 ## 3. Stories (the website)
 
