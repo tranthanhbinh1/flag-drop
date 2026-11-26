@@ -1,4 +1,4 @@
-"""Yellow raw -> Standardized. One rename map per raw layout; everything after `_decode` is shared.
+"""Yellow raw -> Silver (standardized schema). One rename map per raw layout; `_decode_legacy` handles 2009-2010.
 
 2009 and 2010 differ from 2011+ in more than names (checked against every 2009/2010 file, 2026-11-26):
 - timestamps are strings ('YYYY-MM-DD HH:MM:SS'; all parse),
@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import polars as pl
 
-from .schemas import STANDARDIZED_YELLOW
+from .schemas import SILVER_YELLOW, month_start
 
 RENAME_2009 = {
     "vendor_name": "vendor_id",
@@ -85,7 +85,7 @@ def _decode_legacy(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def standardize(raw: pl.DataFrame, source_month: str, source_file: str) -> pl.DataFrame:
-    version = STANDARDIZED_YELLOW.schema_version_for(source_month)
+    version = SILVER_YELLOW.schema_version_for(source_month)
 
     df = raw.rename(RENAMES.get(version, RENAME_2011), strict=False)
     if version in RENAMES:
@@ -94,7 +94,7 @@ def standardize(raw: pl.DataFrame, source_month: str, source_file: str) -> pl.Da
         pl.col("store_and_fwd").cast(pl.String).replace_strict(STORE_AND_FWD, default=None, return_dtype=pl.Boolean)
     )
 
-    schema = STANDARDIZED_YELLOW.schema
+    schema = SILVER_YELLOW.schema
     df = df.with_columns(pl.lit(None, dtype=schema[c]).alias(c) for c in schema if c not in df.columns)
 
     df = df.cast({c: t for c, t in schema.items() if c in df.columns}, strict=True)
@@ -110,12 +110,12 @@ def standardize(raw: pl.DataFrame, source_month: str, source_file: str) -> pl.Da
             (~pl.col("passenger_count").is_between(1, 6)).fill_null(True).alias("is_passenger_count_invalid"),
         )
         .with_columns(
-            (~pl.any_horizontal(STANDARDIZED_YELLOW.flags)).alias("is_valid_trip"),
+            (~pl.any_horizontal(SILVER_YELLOW.flags)).alias("is_valid_trip"),
         )
     )
 
     df = df.with_columns(
-        pl.lit(source_month).alias("source_month"),
+        pl.lit(month_start(source_month)).alias("source_month"),
         pl.lit(source_file).alias("source_file"),
         pl.lit(version).alias("schema_version"),
         pl.lit(datetime.now(UTC), dtype=pl.Datetime("us", "UTC")).alias("ingested_at"),

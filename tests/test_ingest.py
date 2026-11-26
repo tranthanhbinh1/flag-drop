@@ -1,39 +1,14 @@
 """Run the raw assets through Dagster with file-backed fakes for MinIO and TLC."""
 
-import shutil
 from pathlib import Path
 
 import dagster as dg
 import polars as pl
 import pytest
+from fakes import FakeObjectStore, FakeTlc
 
 from flag_drop.assets.ingest import build_raw_asset
-from flag_drop.resources import RawFiles, RawObjectStore, TlcSource
-
-
-class FakeObjectStore(RawObjectStore):
-    """Stores objects as files under endpoint_url (a local directory)."""
-
-    def object_size(self, key: str) -> int | None:
-        path = Path(self.endpoint_url) / self.bucket / key
-        return path.stat().st_size if path.is_file() else None
-
-    def upload(self, path: Path, key: str) -> None:
-        target = Path(self.endpoint_url) / self.bucket / key
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
-
-
-class FakeTlc(TlcSource):
-    """Serves files from base_url (a local directory); anything missing is 'not published'."""
-
-    def fetch(self, filename: str, dest: Path) -> bool:
-        src = Path(self.base_url) / filename
-        if not src.is_file():
-            return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dest)
-        return True
+from flag_drop.resources import RawFiles
 
 
 @pytest.fixture

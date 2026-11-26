@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Flag Drop: 15 years of NYC trips, in data. Polars + Delta Lake -> DuckDB/dbt, orchestrated by Dagster."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "dagster-aws>=0.29.31",
+    "dagster-deltalake-polars>=0.29.31",
+    "dagster-polars>=0.27.12",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -61,3 +65,5 @@ python-version = "3.12"
 # would then treat it as site-packages and skip it.
 disable-project-excludes-heuristics = true
 project-excludes = ["**/.venv/**", "**/__pycache__", "**/node_modules", "data/**"]
+# pytest (rootdir-relative, no tests/__init__.py) puts tests/ on sys.path, so tests can share fixtures modules.
+search-path = ["tests"]

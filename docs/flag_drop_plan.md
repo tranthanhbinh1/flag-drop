@@ -83,7 +83,7 @@ through whatever TLC has published in 2026 (~2-month lag).
 | 2025+ | adds `cbd_congestion_fee` | taxi zone IDs |
 | 2026-06+ | adds `request_source` | taxi zone IDs |
 
-The authoritative schema-version list per dataset (incl. fhvhv: 2019-02, 2025-01) lives in `etl/flag_drop/transformation/standardized/schemas.py`.
+The authoritative schema-version list per dataset (incl. fhvhv: 2019-02, 2025-01) lives in `etl/flag_drop/transformation/silver/schemas.py`.
 
 Key wrinkle: **2009–2010 trips have coordinates, everything after has zone IDs only.** Silver keeps
 both (nullable lat/lon and nullable zone IDs in one yellow table). Unifying them requires a spatial
@@ -140,12 +140,12 @@ TLC CloudFront ──► BRONZE  raw parquet files, as published (data/raw/{year
                  Dagster  (dataset × month partitions, sensors for new months)
                         │
                         ▼  Polars: one raw file → one Silver partition
-                   SILVER  Delta Lake tables, one per dataset (data/silver/{dataset}/)
+                   SILVER  Delta Lake tables on MinIO, one per dataset (s3://flag-drop/silver/{dataset}/)
                         │      partitioned by source_month; conformed schema across versions,
                         │      typed, row-level quality flags; partition overwrite per run
                         │
                         ▼  dbt-duckdb reads Silver via delta_scan()
-                   GOLD    DuckDB file (data/flag_drop.duckdb)
+                   GOLD    marts as files on MinIO (s3://flag-drop/gold/...); DuckDB is compute only
                              staging       thin 1:1 views over Silver sources
                              intermediate  unified trips across services, zone/CBD enrichment
                              marts         small, story-shaped aggregates, contracts enforced
@@ -170,7 +170,7 @@ which stays small.
 | Bronze → Silver compute | Polars (lazy/streaming where possible) | Per-file conform logic in plain, unit-testable Python; fast single-node |
 | Silver storage | Delta Lake via `deltalake` (delta-rs) | ACID partition overwrite, schema enforcement, time travel; same format as Databricks |
 | Silver validation | Native Polars (strict cast to a target `pl.Schema`, expression checks) + Delta schema enforcement + Dagster asset checks | No extra dependency; checks show up in the Dagster UI |
-| Gold compute | DuckDB (local file) | Handles 1.5B-row FHVHV aggregations on one machine; zero cost |
+| Gold compute | DuckDB (compute; marts written to MinIO, local file only as scratch/catalog) | Handles 1.5B-row FHVHV aggregations on one machine; zero cost |
 | Gold transform | dbt-core + dbt-duckdb | Industry-standard modeling; tests, contracts and docs for free |
 | Orchestration | Dagster + dagster-dbt | Polars assets and dbt models in one lineage graph; partitions, backfills, asset checks |
 | Ingestion | Dagster asset with plain `httpx` download | Files are already clean parquet; dlt adds little here (revisit if adding API sources) |
@@ -194,7 +194,8 @@ should be < 10 MB compressed, the full site payload < 50 MB.
 
 One Delta table per dataset: `silver/yellow`, `silver/green`, `silver/fhv`, `silver/fhvhv`.
 
-- **Partition column `source_month`** = the month of the raw file, *not* the pickup month. This keeps
+- **Partition column `source_month`** (Date, first day of the raw file's month) = the month of the raw
+  file, *not* the pickup month. This keeps
   one Dagster partition = one raw file = one Delta partition, so overwrites are exact and idempotent.
   Trips stamped outside their file's month are kept and flagged (`is_out_of_period`).
 - **Write mode:** overwrite only the run's partition (`mode="overwrite"` with a
@@ -221,7 +222,7 @@ One Delta table per dataset: `silver/yellow`, `silver/green`, `silver/fhv`, `sil
 models/
   staging/
     silver/
-      _silver__sources.yml          # sources with external_location: delta_scan('data/silver/<dataset>')
+      _silver__sources.yml          # sources with external_location: delta_scan('s3://flag-drop/silver/<dataset>') (DuckDB S3 secret for MinIO)
       stg_silver__yellow.sql        # thin: select/rename to project conventions, no schema-version logic
       stg_silver__green.sql
       stg_silver__fhv.sql
@@ -266,16 +267,19 @@ Conventions:
   - `raw_<dataset>` (Bronze, partitioned; `assets/ingest.py`): use the local file or download it,
     verify row count > 0 and record a schema fingerprint, upload to MinIO if missing or a different size.
     A month TLC has not published (HTTP 403) yields no materialization rather than a failure.
-  - `silver_<dataset>` (partitioned): Polars conform of one raw file, partition overwrite into the
-    Delta table; emit row count, flag rates, Delta version as metadata. Writes are explicit in the
-    asset (not via an IO manager) to keep the Delta mechanics visible; revisit `dagster-deltalake-polars` later.
+  - `silver/<dataset>` (partitioned; `assets/silver.py`): Polars standardize of one raw file, validated,
+    returned to `DeltaLakePolarsIOManager`, which overwrites that month's partition (predicate on the
+    partition start date) in `{root}/silver/<dataset>`. Emits row count and per-flag rates. The key matches
+    dagster-dbt's default for dbt source `silver.<dataset>`.
   - dbt assets via `@dbt_assets`, partition-aware for incremental models; dbt sources map to the
     `silver_<dataset>` asset keys so lineage is one graph.
   - `site_exports`: writes Parquet for each website mart, uploads to R2.
   - `silver_maintenance` job: OPTIMIZE + VACUUM per Silver table.
-- Concurrency: Silver partitions can run in parallel (disjoint Delta partitions). Confirm delta-rs
-  handles concurrent commits on the local filesystem (retry on commit conflict); otherwise cap with a
-  Dagster concurrency pool. dbt (DuckDB writer) runs with a pool of 1.
+- Concurrency: Silver partitions run in parallel (pool `silver`, default limit 4). Verified 2026-11-26 with
+  12 parallel writer processes (delta-rs 1.7, local FS): writes to disjoint partitions of an existing table
+  all commit; racing to *create* the table fails (`CommitFailedError: Protocol changed`), so
+  `utils/delta.ensure_table` creates it from the target schema first and treats losing that race as success.
+  dbt (DuckDB writer) runs with a pool of 1.
 - Asset checks: row counts vs previous month (anomaly band), share of invalid trips per month,
   freshness of latest partition, schema fingerprint unchanged within a schema version, Bronze vs Silver row
   count equality (Silver never drops rows).
@@ -306,7 +310,7 @@ flag-drop/
     flag_drop/                    # Python package; only assets/, resources, partitions, definitions import Dagster
       definitions.py
       assets/{ingest,silver,dbt,exports}.py
-      transformation/standardized/
+      transformation/silver/
         schemas.py                # Silver contracts: pl.Schema, schema versions, validation
         {yellow,green,fhv,fhvhv}.py  # pure Polars standardize functions + rename maps
       utils/tlc.py                # TLC download + raw file validation
@@ -326,7 +330,7 @@ flag-drop/
     raw/                          # Bronze archive (symlink to lakehouse/data, read-only)
     landing/                      # Bronze months downloaded by Flag Drop
     silver/                       # Delta tables
-    flag_drop.duckdb              # Gold
+    flag_drop.duckdb              # DuckDB scratch/catalog (Gold marts themselves live on MinIO)
     exports/                      # site Parquet
   .github/workflows/
 ```
@@ -352,7 +356,7 @@ MinIO/Postgres containers must not hold its ports):
 
 | Service | Used for | Address (host / in-network) |
 |---|---|---|
-| MinIO | Bronze copy (`raw` bucket, `data/{year}/…`); later possibly Silver | `localhost:9000` / `minio:9000` |
+| MinIO | Bronze copy (`raw` bucket, `data/{year}/…`); Silver Delta tables (`flag-drop` bucket, `silver/<dataset>`) | `localhost:9000` / `minio:9000` |
 | Postgres (`postgres_container`) | Dagster run/event/schedule storage (phase 2) | `localhost:5432` / `postgres:5432` |
 
 Prerequisite (one-time, **done 2026-11-24**): remove the orphaned empty `golden-retriever-minio-1` and start the
@@ -371,7 +375,7 @@ MinIO access key (read/write on `raw`) and its own Postgres user/database, never
 
 - `uv run dagster dev` from the repo root (`[tool.dagster]` in `pyproject.toml` points at `flag_drop.definitions`).
 - `DAGSTER_HOME=~/.dagster/flag-drop` (persistent, outside the repo) with default SQLite storage.
-- Data on local disk under `data/`; MinIO at `localhost:9000`.
+- Bronze on local disk under `data/` (copy in MinIO); Silver in MinIO (`SILVER_ROOT_URI`); MinIO at `localhost:9000`.
 - Good enough for iteration and the M1 thin slice; not intended to run unattended for months.
 
 ### Phase 2 (M2+): Docker Compose in this repo
@@ -393,7 +397,7 @@ webserver        UI on :3000
 - Run launcher: **DefaultRunLauncher**, not DockerRunLauncher. No Docker socket, no per-run images,
   data volumes mounted into one container only. Per-run isolation isn't worth it for a single-user pipeline.
 - Bind mounts into `code_location`: `data/raw` (resolved symlink target, read-only),
-  `data/silver`, `data/flag_drop.duckdb` dir, `data/exports`.
+  `data/landing` and the `data/flag_drop.duckdb` scratch dir (Silver and Gold live in MinIO, not mounted).
 - `mem_limit: 40g`, `cpus: 12` on `code_location`, leaving headroom for the desktop and other stacks.
 - Backfills: one run per partition (fits Delta partition overwrite, easy retry); revisit
   `BackfillPolicy.single_run` only if per-run overhead dominates.
@@ -431,7 +435,7 @@ page beats complete models with no site.
 ## 12. Carry-over from `lakehouse`
 
 - Symlink raw parquet from `lakehouse/data/` as `data/raw` — no need to re-download 68 GB.
-- Port the column rename maps in `src/etl/jobs/nyc_tlc_stg_trip_data.py` into `transformation/standardized/*.py`
+- Port the column rename maps in `src/etl/jobs/nyc_tlc_stg_trip_data.py` into `transformation/silver/*.py`
   (Python dict → Python dict; Spark `withColumnRenamed` → Polars `rename`).
 - Translate the Pandera schemas in `src/etl/schemas/nyc_tlc_silver_quality_schemas.py` into target
   `pl.Schema` definitions + Polars check expressions (no Pandera dependency), and check definitions from `src/etl/jobs/nyc_tlc_silver_quality.py`.
@@ -444,10 +448,7 @@ page beats complete models with no site.
   this bounds how many Silver partitions can run in parallel.
 - Should Silver live on R2 later (shareable dataset, future API)? Delta on object storage needs
   conditional-write support; check delta-rs + R2 at that point.
-- MinIO's role beyond a Bronze copy: should Dagster read Bronze from MinIO (`s3://raw/...`) instead of
-  local disk, and should Silver Delta tables live on MinIO too? Delta on S3-compatible storage needs
-  safe concurrent commits (conditional writes or a locking provider); check delta-rs + MinIO support.
-  Same question applies to R2 later.
+- Gold mart format on MinIO: dbt-duckdb `external` Parquet vs Delta. Decide when the dbt project starts.
 - Domain name.
 
 ## 14. Decision log
@@ -472,3 +473,26 @@ page beats complete models with no site.
   dbt project (`etl/dbt`).** The package does far more than orchestration (download, conform, validation);
   one folder for the whole pipeline, with dbt in its own subfolder so dbt's `tests/`, `target/` and
   packages do not mix with Python. Rejected: `worker/` (clashes with Dagster's run worker), dbt files flat in `etl/`.
+- **2026-11-26 — Medallion names in code and docs: Bronze (raw files) → Silver → Gold; "standardize" is the
+  verb for what Silver does.** `transformation/standardized/` became `transformation/silver/` (contracts are
+  `SilverTable`, `SILVER_YELLOW`, …; functions stay `standardize`). Rejected: raw → standardized → insight
+  (the day-job naming; clearer to insiders, but medallion is what readers of a public portfolio recognise).
+- **2026-11-26 — Silver writes via `dagster-deltalake-polars` (`DeltaLakePolarsIOManager`), not a custom writer.**
+  Less code to own, and future Dagster assets can load Silver months as inputs. Consequences: `source_month`
+  is a Date (the IO manager matches a partition by its start date); assets are keyed `silver/<dataset>`;
+  pyarrow becomes a dependency. Sharp edges found in 0.29.31's source: if it cannot open the table it falls
+  back to an *unpredicated* overwrite (would wipe other months when parallel runs create the table), so
+  assets call `utils/delta.ensure_table` first; its partition stats (`num_rows`, `size_bytes`) fail on
+  deltalake 1.x and are skipped with a warning. `dagster-polars` rejected: last release 0.27.12, behind Dagster.
+- **2026-11-26 — Silver lives on MinIO (`s3://flag-drop/silver/<dataset>`, env `SILVER_ROOT_URI`), not
+  `data/silver`.** One object store for every layer the site and other tools read, and the setup carries
+  over to R2. Concurrency verified on the infra-homelab MinIO: 3 rounds × 20 parallel writers, no lost
+  commits with delta-rs 1.7 defaults (`aws_conditional_put=etag` made no difference, and dagster-deltalake's
+  `S3Config` silently drops unknown keys, so it could not be passed anyway). Re-test before moving to R2.
+  Consequence for Gold: DuckDB needs an S3 secret (endpoint, keys, `USE_SSL false`, path-style URLs) for
+  `delta_scan` on MinIO.
+- **2026-11-26 — Flag Drop is a lakehouse: every layer lives on object storage (MinIO now, R2 later).**
+  Bronze `s3://raw/data/...`, Silver `s3://flag-drop/silver/<dataset>`, Gold marts `s3://flag-drop/gold/...`.
+  Local disk is only a download area (`data/landing`, plus the read-only old archive that `raw_<dataset>`
+  validates and uploads from). Silver assets read Bronze from the bucket (`RawObjectStore.read_parquet`),
+  never from local copies; DuckDB is the Gold compute engine, not its storage.

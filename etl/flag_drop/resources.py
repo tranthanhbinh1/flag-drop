@@ -1,10 +1,11 @@
-"""Dagster resources: local raw files, the MinIO raw bucket, and the TLC download source."""
+"""Dagster resources: local raw files, Silver Delta tables, the MinIO raw bucket, and the TLC download source."""
 
 from pathlib import Path
 
 import boto3
 import dagster as dg
 import httpx
+import polars as pl
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -39,8 +40,37 @@ class RawFiles(dg.ConfigurableResource):
         return self.landing_dir / relpath
 
 
+class SilverTables(dg.ConfigurableResource):
+    """Where the Silver Delta tables live: `{root_uri}/silver/{dataset}`, e.g. `s3://flag-drop/silver/yellow`.
+
+    Must mirror `silver_io_manager` (same root and MinIO credentials; it stores asset `silver/<dataset>`
+    at `{root_uri}/silver/<dataset>`). Assets use this to create a table before the IO manager writes.
+    Without `endpoint_url` the root is a local directory (tests).
+    """
+
+    root_uri: str
+    endpoint_url: str | None = None
+    access_key: str | None = None
+    secret_key: str | None = None
+
+    def uri(self, dataset: str) -> str:
+        return f"{self.root_uri.rstrip('/')}/silver/{dataset}"
+
+    def storage_options(self) -> dict[str, str]:
+        """delta-rs storage options (same keys as dagster-deltalake's S3Config + ClientConfig)."""
+        if self.endpoint_url is None:
+            return {}
+        options = {"endpoint": self.endpoint_url, "region": "us-east-1", "allow_http": "true"}
+        if self.access_key and self.secret_key:
+            options |= {"access_key_id": self.access_key, "secret_access_key": self.secret_key}
+        return options
+
+
 class RawObjectStore(dg.ConfigurableResource):
-    """The MinIO bucket holding the full raw archive, keyed `{prefix}/{year}/{filename}`."""
+    """The MinIO bucket holding the full raw archive (Bronze), keyed `{prefix}/{year}/{filename}`.
+
+    `raw_<dataset>` puts files here; Silver reads them from here, never from local disk.
+    """
 
     endpoint_url: str
     access_key: str
@@ -60,6 +90,20 @@ class RawObjectStore(dg.ConfigurableResource):
 
     def key(self, relpath: str) -> str:
         return f"{self.prefix}/{relpath}"
+
+    def uri(self, key: str) -> str:
+        return f"s3://{self.bucket}/{key}"
+
+    def read_parquet(self, key: str) -> pl.DataFrame:
+        """Read one Bronze file straight from the bucket. Raises FileNotFoundError if the key is missing."""
+        options = {
+            "aws_endpoint_url": self.endpoint_url,
+            "aws_access_key_id": self.access_key,
+            "aws_secret_access_key": self.secret_key,
+            "aws_region": "us-east-1",
+            "aws_allow_http": str(self.endpoint_url.startswith("http://")).lower(),
+        }
+        return pl.read_parquet(self.uri(key), storage_options=options)
 
     def object_size(self, key: str) -> int | None:
         try:

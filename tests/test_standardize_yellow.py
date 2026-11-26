@@ -1,18 +1,18 @@
 """Yellow standardize on hand-made raw rows: one row per rule, so a failing test names the broken rule.
 
 Every rule test runs against each raw layout (2009, 2010, 2011+). Tests describe changes with
-Standardized column names; `Layout.raw` translates them to that layout's raw names and encodings.
+Silver column names; `Layout.raw` translates them to that layout's raw names and encodings.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 import polars as pl
 import pytest
 
-from flag_drop.transformation.standardized.schemas import STANDARDIZED_YELLOW, validate_silver
-from flag_drop.transformation.standardized.yellow import standardize
+from flag_drop.transformation.silver.schemas import SILVER_YELLOW, validate_silver
+from flag_drop.transformation.silver.yellow import standardize
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class Layout:
     month: str  # the partition every test row belongs to; GOOD trips start on the 15th at 08:00
     schema: pl.Schema  # raw column names and dtypes, as TLC publishes them
     good_trip: dict  # a clean 15-minute trip
-    names: dict[str, str]  # Standardized name -> raw name, for the columns tests change
+    names: dict[str, str]  # Silver name -> raw name, for the columns tests change
 
     @property
     def year(self) -> int:
@@ -219,7 +219,7 @@ def layout(request) -> Layout:
 
 
 def flags_set(row: dict) -> set[str]:
-    return {f for f in STANDARDIZED_YELLOW.flags if row[f]}
+    return {f for f in SILVER_YELLOW.flags if row[f]}
 
 
 # --- every layout ---------------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def flags_set(row: dict) -> set[str]:
 
 def test_good_trip_is_valid_and_passes_the_contract(layout: Layout):
     df = layout.run({})
-    validate_silver(df, STANDARDIZED_YELLOW, layout.month)
+    validate_silver(df, SILVER_YELLOW, layout.month)
     row = df.row(0, named=True)
     assert flags_set(row) == set()
     assert row["is_valid_trip"] is True
@@ -237,9 +237,9 @@ def test_good_trip_is_valid_and_passes_the_contract(layout: Layout):
 
 def test_lineage(layout: Layout):
     row = layout.run({}).row(0, named=True)
-    assert row["source_month"] == layout.month
+    assert row["source_month"] == date(layout.year, int(layout.month[5:]), 1)
     assert row["source_file"] == f"yellow_tripdata_{layout.month}.parquet"
-    assert row["schema_version"] == STANDARDIZED_YELLOW.schema_version_for(layout.month)
+    assert row["schema_version"] == SILVER_YELLOW.schema_version_for(layout.month)
 
 
 def test_columns_that_did_not_exist_yet_are_null(layout: Layout):
@@ -274,7 +274,7 @@ RULES: list[tuple[str, Callable[[Layout], dict], str]] = [
 @pytest.mark.parametrize(("change", "flag"), [(c, f) for _, c, f in RULES], ids=[i for i, _, _ in RULES])
 def test_each_rule_sets_only_its_own_flag(layout: Layout, change: Callable[[Layout], dict], flag: str):
     df = layout.run(change(layout))
-    validate_silver(df, STANDARDIZED_YELLOW, layout.month)  # flagged rows still meet the contract
+    validate_silver(df, SILVER_YELLOW, layout.month)  # flagged rows still meet the contract
     row = df.row(0, named=True)
     assert flags_set(row) == {flag}
     assert row["is_valid_trip"] is False

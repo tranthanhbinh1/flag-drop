@@ -1,6 +1,6 @@
 """Silver table contracts: target schema, schema versions, and validation for each Silver Delta table.
 
-Standardize functions (`standardized/<dataset>.py`, raw DataFrame -> Silver DataFrame) must return a frame
+Standardize functions (`silver/<dataset>.py`, raw DataFrame -> Silver DataFrame) must return a frame
 that passes `validate_silver`. This module says *what* Silver looks like; standardize decides *how*.
 
 Conventions (carried over from the lakehouse `YellowTripsPanderaSchema`):
@@ -23,14 +23,23 @@ never null, and a high flag rate can mean "TLC stopped reporting this field", no
 """
 
 from dataclasses import dataclass
+from datetime import date
 
 import polars as pl
 
 PARTITION_COLUMN = "source_month"
 
+
+def month_start(month: str) -> date:
+    """'YYYY-MM' (how code and Dagster name a month) -> the `source_month` value stored in Silver."""
+    return date(int(month[:4]), int(month[5:7]), 1)
+
+
 LINEAGE = pl.Schema(
     {
-        "source_month": pl.String,  # 'YYYY-MM' of the raw file (not of the pickup); Delta partition
+        # First day of the raw file's month (not of the pickup); Delta partition column. A Date, not
+        # 'YYYY-MM' text, because Dagster's Delta IO manager selects a month by its start date.
+        "source_month": pl.Date,
         "source_file": pl.String,  # raw filename, e.g. 'yellow_tripdata_2024-01.parquet'
         "schema_version": pl.String,  # first month of the raw layout this row came from, see schema_versions
         "ingested_at": pl.Datetime("us", "UTC"),  # when the Silver partition was written
@@ -39,7 +48,7 @@ LINEAGE = pl.Schema(
 
 
 @dataclass(frozen=True)
-class StandardizedTable:
+class SilverTable:
     name: str
     schema: pl.Schema
     # Raw layout changes, as the first month of each layout ('YYYY-MM'), oldest first. A change is any
@@ -77,8 +86,8 @@ def _flags(*names: str) -> dict[str, pl.DataType]:
 #   2026-06  + request_source
 YELLOW_FLAGS = ("is_non_positive_duration", "is_non_positive_fare", "is_out_of_period", "is_passenger_count_invalid")
 
-STANDARDIZED_YELLOW = StandardizedTable(
-    name="standardized_yellow",
+SILVER_YELLOW = SilverTable(
+    name="silver_yellow",
     schema_versions=("2009-01", "2010-01", "2011-01", "2023-02", "2025-01", "2026-06"),
     flags=YELLOW_FLAGS,
     required=("pickup_ts", "dropoff_ts", "trip_duration_min"),
@@ -124,8 +133,8 @@ STANDARDIZED_YELLOW = StandardizedTable(
 #   2025-01  + cbd_congestion_fee
 FHVHV_FLAGS = ("is_non_positive_duration", "is_non_positive_fare", "is_out_of_period")
 
-STANDARDIZED_FHVHV = StandardizedTable(
-    name="standardized_fhvhv",
+SILVER_FHVHV = SilverTable(
+    name="silver_fhvhv",
     schema_versions=("2019-02", "2025-01"),
     flags=FHVHV_FLAGS,
     required=("hvfhs_license_num", "pickup_ts", "dropoff_ts", "trip_duration_min"),
@@ -164,19 +173,19 @@ STANDARDIZED_FHVHV = StandardizedTable(
     ),
 )
 
-STANDARDIZED_TABLES: dict[str, StandardizedTable] = {"yellow": STANDARDIZED_YELLOW, "fhvhv": STANDARDIZED_FHVHV}
+SILVER_TABLES: dict[str, SilverTable] = {"yellow": SILVER_YELLOW, "fhvhv": SILVER_FHVHV}
 
 
 # --- validation -----------------------------------------------------------------------------------
 
 
-class StandardizedValidationError(ValueError):
+class SilverValidationError(ValueError):
     def __init__(self, table: str, problems: list[str]):
         self.problems = problems
         super().__init__(f"{table}: " + "; ".join(problems))
 
 
-def validate_silver(df: pl.DataFrame, table: StandardizedTable, source_month: str) -> None:
+def validate_silver(df: pl.DataFrame, table: SilverTable, source_month: str) -> None:
     """Check a conformed frame before it is written to Delta. Raises with every problem found.
 
     1. Exact schema: same columns, same order, same dtypes (catches a missed cast or rename).
@@ -200,13 +209,13 @@ def validate_silver(df: pl.DataFrame, table: StandardizedTable, source_month: st
         if not (missing or extra or wrong):
             problems.append("column order differs from the table schema")
         # Row checks below assume the right columns; stop here.
-        raise StandardizedValidationError(table.name, problems)
+        raise SilverValidationError(table.name, problems)
 
     version = table.schema_version_for(source_month)
     any_flag = pl.any_horizontal(*table.flags)
     counts = df.select(
         *[pl.col(c).null_count().alias(f"null:{c}") for c in table.not_null],
-        (pl.col("source_month") != source_month).sum().alias("bad:source_month"),
+        (pl.col("source_month") != month_start(source_month)).sum().alias("bad:source_month"),
         (pl.col("schema_version") != version).sum().alias("bad:schema_version"),
         (pl.col("is_valid_trip") == any_flag).sum().alias("bad:is_valid_trip"),
     ).row(0, named=True)
@@ -217,10 +226,10 @@ def validate_silver(df: pl.DataFrame, table: StandardizedTable, source_month: st
             what = "null values" if kind == "null" else "rows with a wrong value"
             problems.append(f"{n} {what} in {column}")
     if problems:
-        raise StandardizedValidationError(table.name, problems)
+        raise SilverValidationError(table.name, problems)
 
 
-def flag_rates(df: pl.DataFrame, table: StandardizedTable) -> dict[str, float]:
+def flag_rates(df: pl.DataFrame, table: SilverTable) -> dict[str, float]:
     """Share of rows with each flag set (and share of valid trips), for asset metadata."""
     if df.height == 0:
         return {}
