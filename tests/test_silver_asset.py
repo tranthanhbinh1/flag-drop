@@ -1,4 +1,4 @@
-"""Run silver/yellow through Dagster: Bronze from a file-backed fake bucket, Silver to a local Delta table."""
+"""Run the Silver assets through Dagster: Bronze from a file-backed fake bucket, Silver to a local Delta table."""
 
 from datetime import date
 from pathlib import Path
@@ -6,6 +6,7 @@ from pathlib import Path
 import dagster as dg
 import polars as pl
 import pytest
+import test_standardize_fhvhv as fhvhv_rows
 from dagster_deltalake import LocalConfig
 from dagster_deltalake_polars import DeltaLakePolarsIOManager
 from fakes import FakeObjectStore
@@ -13,8 +14,8 @@ from test_standardize_yellow import Y2009, Y2024, Layout
 
 from flag_drop.assets.silver import IO_MANAGER_KEY, build_silver_asset
 from flag_drop.resources import SilverTables
-from flag_drop.transformation.silver import yellow
-from flag_drop.transformation.silver.schemas import SILVER_YELLOW
+from flag_drop.transformation.silver import fhvhv, yellow
+from flag_drop.transformation.silver.schemas import SILVER_FHVHV, SILVER_YELLOW
 from flag_drop.utils.tlc import raw_relpath
 
 
@@ -28,16 +29,24 @@ def raw_store(lake: Path) -> FakeObjectStore:
     return FakeObjectStore(endpoint_url=str(lake), access_key="k", secret_key="s", bucket="raw")
 
 
-def upload_raw(lake: Path, layout: Layout, *changes: dict) -> None:
+def upload_raw(lake: Path, layout: Layout | fhvhv_rows.Layout, *changes: dict, dataset: str = "yellow") -> None:
     store = raw_store(lake)
-    path = store.path(store.key(raw_relpath("yellow", layout.month)))
+    path = store.path(store.key(raw_relpath(dataset, layout.month)))
     path.parent.mkdir(parents=True, exist_ok=True)
     layout.raw(*changes).write_parquet(path)
 
 
-def materialize(lake: Path, month: str, raise_on_error: bool = True) -> dg.ExecuteInProcessResult:
+ASSETS = {
+    "yellow": build_silver_asset("yellow", SILVER_YELLOW, yellow.standardize),
+    "fhvhv": build_silver_asset("fhvhv", SILVER_FHVHV, fhvhv.standardize),
+}
+
+
+def materialize(
+    lake: Path, month: str, raise_on_error: bool = True, dataset: str = "yellow"
+) -> dg.ExecuteInProcessResult:
     return dg.materialize(
-        [build_silver_asset("yellow", SILVER_YELLOW, yellow.standardize)],
+        [ASSETS[dataset]],
         partition_key=f"{month}-01",
         resources={
             "raw_store": raw_store(lake),
@@ -48,8 +57,8 @@ def materialize(lake: Path, month: str, raise_on_error: bool = True) -> dg.Execu
     )
 
 
-def silver(lake: Path) -> pl.DataFrame:
-    return pl.read_delta(str(lake / "silver" / "yellow"))
+def silver(lake: Path, dataset: str = "yellow") -> pl.DataFrame:
+    return pl.read_delta(str(lake / "silver" / dataset))
 
 
 def test_month_is_written_with_metadata(lake: Path):
@@ -90,3 +99,18 @@ def test_missing_bronze_file_fails_without_writing(lake: Path):
 
     assert not result.success
     assert not (lake / "silver").exists()
+
+
+def test_fhvhv_month_is_written_next_to_yellow(lake: Path):
+    upload_raw(lake, Y2024, {})
+    upload_raw(lake, fhvhv_rows.F2025, {}, {"base_passenger_fare": 0.0}, dataset="fhvhv")
+    materialize(lake, "2024-01")
+
+    [mat] = materialize(lake, "2025-03", dataset="fhvhv").asset_materializations_for_node("silver__fhvhv")
+
+    df = silver(lake, "fhvhv")
+    assert df.schema == SILVER_FHVHV.schema
+    assert df["is_valid_trip"].to_list() == [True, False]
+    assert mat.metadata["schema_version"].value == "2025-01"
+    assert mat.metadata["rate_is_non_positive_fare"].value == 0.5
+    assert silver(lake).height == 1  # yellow untouched

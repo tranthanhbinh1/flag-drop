@@ -5,9 +5,10 @@ import polars as pl
 
 from flag_drop.partitions import monthly_partitions, partition_month
 from flag_drop.resources import RawObjectStore, SilverTables
-from flag_drop.transformation.silver import yellow
+from flag_drop.transformation.silver import fhvhv, yellow
 from flag_drop.transformation.silver.schemas import (
     PARTITION_COLUMN,
+    SILVER_FHVHV,
     SILVER_YELLOW,
     SilverTable,
     flag_rates,
@@ -27,7 +28,7 @@ def build_silver_asset(dataset: str, table: SilverTable, standardize: Standardiz
         partitions_def=monthly_partitions(dataset),
         deps=[dg.AssetKey(f"raw_{dataset}")],
         io_manager_key=IO_MANAGER_KEY,
-        metadata={"partition_col": PARTITION_COLUMN},
+        metadata={"partition_expr": PARTITION_COLUMN},
         pool="silver",
         kinds={"polars", "delta"},
         description=(
@@ -74,4 +75,7 @@ def build_silver_asset(dataset: str, table: SilverTable, standardize: Standardiz
     return _silver
 
 
-silver_assets: list[dg.AssetsDefinition] = [build_silver_asset("yellow", SILVER_YELLOW, yellow.standardize)]
+silver_assets: list[dg.AssetsDefinition] = [
+    build_silver_asset("yellow", SILVER_YELLOW, yellow.standardize),
+    build_silver_asset("fhvhv", SILVER_FHVHV, fhvhv.standardize),
+]
