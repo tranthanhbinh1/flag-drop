@@ -1,0 +1,54 @@
+# Lint, type check, unit tests and a Dagster definitions load, on every push and PR.
+# Everything here is hermetic: tests use file-backed fakes for MinIO/TLC, so CI needs no secrets
+# and never reaches the homelab. End-to-end runs against MinIO stay manual (`dg launch`).
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# A newer push to the same branch/PR cancels the run it makes obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.7.13" # match the local uv that writes uv.lock; bump together
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies (exact versions from uv.lock)
+        run: uv sync --frozen
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # Same command as `make lint`: ruff, ruff-format, pyrefly and the file hygiene hooks.
+      - name: Lint and type check
+        run: uv run --frozen pre-commit run --all-files --show-diff-on-failure
+
+      - name: Tests
+        run: uv run --frozen pytest -q
+
+      # Loads the code location without any env vars (EnvVar is resolved at run time, not load time).
+      - name: Dagster definitions load
+        working-directory: etl
+        run: uv run --frozen dg check defs
