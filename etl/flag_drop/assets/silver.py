@@ -21,7 +21,9 @@ Standardize = Callable[[pl.DataFrame, str, str], pl.DataFrame]  # (raw, 'YYYY-MM
 IO_MANAGER_KEY = "silver_io_manager"
 
 
-def build_silver_asset(dataset: str, table: SilverTable, standardize: Standardize) -> dg.AssetsDefinition:
+def build_silver_asset(
+    dataset: str, table: SilverTable, standardize: Standardize, pool: str = "silver"
+) -> dg.AssetsDefinition:
     @dg.asset(
         key=["silver", dataset],
         group_name="silver",
@@ -29,7 +31,7 @@ def build_silver_asset(dataset: str, table: SilverTable, standardize: Standardiz
         deps=[dg.AssetKey(f"raw_{dataset}")],
         io_manager_key=IO_MANAGER_KEY,
         metadata={"partition_expr": PARTITION_COLUMN},
-        pool="silver",
+        pool=pool,
         kinds={"polars", "delta"},
         description=(
             f"Standardized {dataset} trips: one Delta partition per raw file (`{PARTITION_COLUMN}`), "
@@ -77,5 +79,6 @@ def build_silver_asset(dataset: str, table: SilverTable, standardize: Standardiz
 
 silver_assets: list[dg.AssetsDefinition] = [
     build_silver_asset("yellow", SILVER_YELLOW, yellow.standardize),
-    build_silver_asset("fhvhv", SILVER_FHVHV, fhvhv.standardize),
+    # One fhvhv month peaks at ~15 GB RSS (yellow ~4 GB), so it gets its own, smaller pool; limits in `make pools`.
+    build_silver_asset("fhvhv", SILVER_FHVHV, fhvhv.standardize, pool="silver_fhvhv"),
 ]

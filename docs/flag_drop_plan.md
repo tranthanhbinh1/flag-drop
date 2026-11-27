@@ -275,7 +275,8 @@ Conventions:
     `silver_<dataset>` asset keys so lineage is one graph.
   - `site_exports`: writes Parquet for each website mart, uploads to R2.
   - `silver_maintenance` job: OPTIMIZE + VACUUM per Silver table.
-- Concurrency: Silver partitions run in parallel (pool `silver`, default limit 4). Verified 2026-11-26 with
+- Concurrency: Silver partitions run in parallel (pool `silver`, limit 4; fhvhv in its own pool `silver_fhvhv`,
+  limit 2, because one fhvhv month peaks at ~15 GB RSS against ~4 GB for yellow, measured 2026-11-26). Verified 2026-11-26 with
   12 parallel writer processes (delta-rs 1.7, local FS): writes to disjoint partitions of an existing table
   all commit; racing to *create* the table fails (`CommitFailedError: Protocol changed`), so
   `utils/delta.ensure_table` creates it from the target schema first and treats losing that race as success.
@@ -392,7 +393,7 @@ webserver        UI on :3000
 ```
 
 - `dagster.yaml`: Postgres storage (database `dagster` on `postgres_container`), `QueuedRunCoordinator`
-  with `max_concurrent_runs: 8`, and pools: `silver` = 6 (one FHVHV month ≈ 2–3 GB in Polars),
+  with `max_concurrent_runs: 8`, and pools: `silver` = 4, `silver_fhvhv` = 2 (one FHVHV month peaks at ~15 GB RSS),
   `duckdb` = 1 (single writer), `minio_upload` = 4.
 - Run launcher: **DefaultRunLauncher**, not DockerRunLauncher. No Docker socket, no per-run images,
   data volumes mounted into one container only. Per-run isolation isn't worth it for a single-user pipeline.
@@ -444,8 +445,6 @@ page beats complete models with no site.
 ## 13. Open questions
 
 - Include `fhv` (non-HV bases) at all, or only yellow/green/fhvhv? Its schema is thin.
-- Machine for full FHVHV backfill: confirm RAM/disk. One FHVHV month is ~2–3 GB in Polars memory;
-  this bounds how many Silver partitions can run in parallel.
 - Should Silver live on R2 later (shareable dataset, future API)? Delta on object storage needs
   conditional-write support; check delta-rs + R2 at that point.
 - Gold mart format on MinIO: dbt-duckdb `external` Parquet vs Delta. Decide when the dbt project starts.

@@ -37,7 +37,8 @@ After a code change, rebuilding `code_location` is enough; the webserver reloads
 Stored in Postgres, so set once (re-run after recreating the `dagster` database):
 
 ```bash
-docker exec flag-drop-code_location-1 dagster instance concurrency set silver 6
+docker exec flag-drop-code_location-1 dagster instance concurrency set silver 4
+docker exec flag-drop-code_location-1 dagster instance concurrency set silver_fhvhv 2  # ~15 GB per fhvhv month
 docker exec flag-drop-code_location-1 dagster instance concurrency set duckdb 1
 docker exec flag-drop-code_location-1 dagster instance concurrency set minio_upload 4
 ```

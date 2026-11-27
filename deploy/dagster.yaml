@@ -19,7 +19,7 @@ concurrency:
   runs:
     max_concurrent_runs: 8
   pools:
-    # Named pools (silver=6, duckdb=1, minio_upload=4) are set with
+    # Named pools (silver=4, silver_fhvhv=2, duckdb=1, minio_upload=4) are set with
     # `dagster instance concurrency set <pool> <limit>`; see deploy/README.md.
     default_limit: 4
 
