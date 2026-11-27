@@ -53,3 +53,15 @@ jobs:
       - name: Dagster definitions load
         working-directory: etl
         run: uv run --frozen dg check defs
+
+      # Parses models, sources and YAML without connecting to anything. profiles.yml reads these env vars
+      # when it renders, so give it placeholders; nothing here reaches MinIO.
+      - name: dbt parse
+        working-directory: etl/dbt
+        env:
+          MINIO_ENDPOINT: http://minio.invalid:9000
+          MINIO_ACCESS_KEY: ci
+          MINIO_SECRET_KEY: ci
+          SILVER_ROOT_URI: s3://flag-drop
+          DBT_DUCKDB_PATH: ":memory:"
+        run: uv run --frozen dbt parse --profiles-dir .

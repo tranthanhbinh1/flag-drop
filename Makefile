@@ -5,7 +5,7 @@ export DAGSTER_HOME ?= $(HOME)/.dagster/flag-drop
 COMPOSE := docker compose -f deploy/docker-compose.yaml --env-file .env
 
 .DEFAULT_GOAL := help
-.PHONY: help dev defs dagster-home pools test lint check up down logs
+.PHONY: help dev defs dagster-home pools dbt test lint check up down logs
 
 help: ## List targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -31,6 +31,9 @@ dagster: pools ## Run `dg dev` (webserver + daemon) on localhost:3004 (fixed)
 
 defs: ## Check that the Dagster definitions load
 	cd etl && uv run --frozen --env-file ../.env dg check defs
+
+dbt: ## Run dbt in etl/dbt with the repo .env, e.g. make dbt ARGS="build -s staging"
+	cd etl/dbt && uv run --frozen --env-file ../../.env dbt $(ARGS) --profiles-dir .
 
 test: ## Run pytest
 	uv run --frozen pytest -q

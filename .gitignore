@@ -228,3 +228,4 @@ data/
 # dbt (etl/dbt); target/ is ignored above
 etl/dbt/logs/
 etl/dbt/dbt_packages/
+etl/dbt/.user.yml

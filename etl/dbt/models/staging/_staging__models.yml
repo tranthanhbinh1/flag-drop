@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: stg_taxi_zones
+    columns:
+      - name: location_id
+        data_tests: [unique, not_null]
+      - name: borough
+        data_tests: [not_null]
+  - name: stg_silver__yellow
+    description: One row per raw yellow trip; `is_valid_trip` marks the ones marts should count.
+  - name: stg_silver__fhvhv
+    description: One row per raw FHVHV trip; `fare_amount` is TLC's base_passenger_fare (before tolls, taxes, fees).

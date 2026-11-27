@@ -1,0 +1,22 @@
+# Lives in the project (DBT_PROFILES_DIR=etl/dbt) and holds no secrets: credentials come from the same
+# MINIO_* / SILVER_ROOT_URI env vars as Dagster (repo-root .env locally, env_file in Compose).
+flag_drop:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Relative to etl/dbt (dbt and dagster-dbt run from the project dir). Scratch only: safe to delete.
+      path: "{{ env_var('DBT_DUCKDB_PATH', '../../data/flag_drop.duckdb') }}"
+      threads: 4
+      extensions:
+        - httpfs
+        - delta
+      secrets:
+        - type: s3
+          key_id: "{{ env_var('MINIO_ACCESS_KEY') }}"
+          secret: "{{ env_var('MINIO_SECRET_KEY') }}"
+          # DuckDB wants host:port; MINIO_ENDPOINT is a URL (boto3/delta-rs style).
+          endpoint: "{{ env_var('MINIO_ENDPOINT') | replace('https://', '') | replace('http://', '') }}"
+          use_ssl: "{{ env_var('MINIO_ENDPOINT').startswith('https://') }}"
+          url_style: path # MinIO serves buckets as paths, not subdomains
+          region: us-east-1

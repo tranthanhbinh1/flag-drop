@@ -447,7 +447,8 @@ page beats complete models with no site.
 - Include `fhv` (non-HV bases) at all, or only yellow/green/fhvhv? Its schema is thin.
 - Should Silver live on R2 later (shareable dataset, future API)? Delta on object storage needs
   conditional-write support; check delta-rs + R2 at that point.
-- Gold mart format on MinIO: dbt-duckdb `external` Parquet vs Delta. Decide when the dbt project starts.
+- Gold mart format on MinIO: dbt-duckdb `external` Parquet (leaning; see 2026-11-27 log entry) vs Delta.
+  Decide with the first mart (`fct_trips_daily_zone`).
 - Domain name.
 
 ## 14. Decision log
@@ -495,3 +496,11 @@ page beats complete models with no site.
   Local disk is only a download area (`data/landing`, plus the read-only old archive that `raw_<dataset>`
   validates and uploads from). Silver assets read Bronze from the bucket (`RawObjectStore.read_parquet`),
   never from local copies; DuckDB is the Gold compute engine, not its storage.
+- **2026-11-27 — dbt reads Silver in place; partition pruning verified.** Sources use
+  `external_location: delta_scan('{SILVER_ROOT_URI}/silver/{name}')` and staging models are views, so nothing
+  is copied into DuckDB. With DuckDB 2.0.1 a `source_month = ...` filter scans 6/150 fhvhv files and 1/33
+  yellow files, also through the staging views (M1 exit criterion). DuckDB 2.0.1 can also *write* Delta
+  (`COPY ... (FORMAT delta)`), but dbt-duckdb 1.11.1's `external` materialization only supports
+  parquet/csv/json, so Delta Gold would need a custom materialization; Parquet is the default unless a mart
+  needs Delta's partition overwrite. `profiles.yml` is in the repo with no secrets (env vars only), and CI runs
+  `dbt parse` with placeholder values.

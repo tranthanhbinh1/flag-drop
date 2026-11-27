@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: silver
+    description: >
+      Silver Delta tables written by Dagster (`silver/<dataset>` assets), one partition per raw file
+      (`source_month`). Read in place with DuckDB's delta_scan; filters on source_month prune files.
+    config:
+      external_location: "delta_scan('{{ env_var('SILVER_ROOT_URI') }}/silver/{name}')"
+    tables:
+      - name: yellow
+        description: Yellow taxi trips, 2009+. Every raw row, flagged (`is_valid_trip`), never filtered.
+        meta:
+          dagster:
+            asset_key: ["silver", "yellow"]
+      - name: fhvhv
+        description: High-volume for-hire trips (Uber, Lyft, Via, Juno), 2019-02+. Flagged, never filtered.
+        meta:
+          dagster:
+            asset_key: ["silver", "fhvhv"]

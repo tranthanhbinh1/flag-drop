@@ -1,0 +1,28 @@
+# Gold layer: dbt-duckdb reading Silver Delta tables on MinIO. DuckDB is compute only; its local file
+# (data/flag_drop.duckdb) holds views and scratch tables, and marts are written to s3://flag-drop/gold.
+name: flag_drop
+version: "0.1.0"
+profile: flag_drop
+config-version: 2
+
+flags:
+  send_anonymous_usage_stats: false
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+models:
+  flag_drop:
+    staging:
+      +materialized: view # thin views over delta_scan; nothing is copied into DuckDB
+
+seeds:
+  flag_drop:
+    taxi_zone_lookup:
+      +column_types:
+        LocationID: integer
+        Borough: varchar
+        Zone: varchar
+        service_zone: varchar
